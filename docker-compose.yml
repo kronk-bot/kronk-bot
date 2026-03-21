@@ -20,7 +20,7 @@ services:
       PI_CONFIG_DIR: /data/pi-config
       WORK_DIR: /data/workspace
     volumes:
-      - kronk-bot_data:/data
+      - kronk-data:/data
 
 volumes:
   kronk-bot_data:
