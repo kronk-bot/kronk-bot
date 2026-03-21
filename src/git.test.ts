@@ -6,11 +6,8 @@ import { ResetMode } from 'simple-git'
 const mockClone = mock.fn(async () => {})
 const mockFetch = mock.fn(async () => {})
 const mockReset = mock.fn(async () => {})
-const mockRemote = mock.fn(async () => {})
-const mockGitInstance = { remote: mockRemote, fetch: mockFetch, reset: mockReset }
-const mockSimpleGit = mock.fn((dir?: string) =>
-  dir !== undefined ? (mockGitInstance as any) : { clone: mockClone }
-)
+const mockGitInstance = { clone: mockClone, fetch: mockFetch, reset: mockReset }
+const mockSimpleGit = mock.fn(() => mockGitInstance as any)
 
 let existsSyncResult = false
 const mockExistsSync = mock.fn(() => existsSyncResult)
@@ -28,20 +25,22 @@ describe('cloneOrFetch', () => {
     mockClone.mock.resetCalls()
     mockFetch.mock.resetCalls()
     mockReset.mock.resetCalls()
-    mockRemote.mock.resetCalls()
     mockSimpleGit.mock.resetCalls()
     mockExistsSync.mock.resetCalls()
   })
 
   describe('when .git does not exist', () => {
-    it('clones with the token-authenticated URL', async () => {
+    it('clones with the public URL and injects auth via extraHeader', async () => {
       existsSyncResult = false
       await cloneOrFetch('owner/repo', '/work', 'main', 'tok123')
 
       assert.equal(mockClone.mock.calls.length, 1)
       const [url, workDir] = mockClone.mock.calls[0].arguments as unknown as [string, string]
-      assert.equal(url, 'https://x-access-token:tok123@github.com/owner/repo.git')
+      assert.equal(url, 'https://github.com/owner/repo.git')
       assert.equal(workDir, '/work')
+
+      const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ config: string[] }])[0]
+      assert.ok(opts.config.some((c) => c.includes('Authorization: Basic ')))
     })
 
     it('does not fetch or reset', async () => {
@@ -61,17 +60,12 @@ describe('cloneOrFetch', () => {
       assert.equal(mockClone.mock.calls.length, 0)
     })
 
-    it('updates the remote URL', async () => {
+    it('injects auth via extraHeader config', async () => {
       existsSyncResult = true
       await cloneOrFetch('owner/repo', '/work', 'main', 'tok123')
 
-      const remoteArgs = mockRemote.mock.calls[0].arguments as unknown as [string[]]
-      assert.equal(mockRemote.mock.calls.length, 1)
-      assert.deepEqual(remoteArgs[0], [
-        'set-url',
-        'origin',
-        'https://x-access-token:tok123@github.com/owner/repo.git',
-      ])
+      const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ config: string[] }])[0]
+      assert.ok(opts.config.some((c) => c.includes('Authorization: Basic ')))
     })
 
     it('fetches with --prune', async () => {
@@ -97,12 +91,8 @@ describe('cloneOrFetch', () => {
       existsSyncResult = true
       await cloneOrFetch('owner/repo', '/my/work', 'main', 'tok123')
 
-      assert.ok(
-        (mockSimpleGit.mock.calls as unknown as { arguments: unknown[] }[]).some(
-          c => c.arguments[0] === '/my/work'
-        ),
-        'simpleGit should be called with the workDir'
-      )
+      const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ baseDir: string }])[0]
+      assert.equal(opts.baseDir, '/my/work')
     })
   })
 })

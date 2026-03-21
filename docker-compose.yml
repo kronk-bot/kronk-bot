@@ -23,4 +23,4 @@ services:
       - kronk-data:/data
 
 volumes:
-  kronk-bot_data:
+  kronk-data:

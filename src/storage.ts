@@ -31,7 +31,10 @@ export class Storage {
   }
 
   recordRun(repo: string, ranAt: string): void {
-    this.db.prepare('INSERT INTO runs (repo, ran_at) VALUES (?, ?)').run(repo, ranAt)
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM runs WHERE repo = ?').run(repo)
+      this.db.prepare('INSERT INTO runs (repo, ran_at) VALUES (?, ?)').run(repo, ranAt)
+    })()
   }
 
   close(): void {
