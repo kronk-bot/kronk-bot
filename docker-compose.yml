@@ -1,0 +1,30 @@
+services:
+  kronk-pull:
+    build: .
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # GitHub App auth
+      GITHUB_APP_ID: ${GITHUB_APP_ID}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID}
+      GITHUB_REPO: ${GITHUB_REPO}
+      # LLM
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      MODEL: ${MODEL:-minimax/minimax-m2.5}
+      ORCHESTRATOR_MODEL: ${ORCHESTRATOR_MODEL:-}
+      # Trigger
+      TRIGGER_WORD: ${TRIGGER_WORD:-@kronk-pull}
+      # Polling
+      POLL_INTERVAL: ${POLL_INTERVAL:-300}
+      # Paths (fixed inside container)
+      DB_PATH: /data/db.sqlite
+      PI_CONFIG_DIR: /data/pi-config
+      WORK_DIR: /data/workspace
+      # Options
+      MAIN_BRANCH: ${MAIN_BRANCH:-main}
+    volumes:
+      - kronk-pull_data:/data
+
+volumes:
+  kronk-pull_data:
