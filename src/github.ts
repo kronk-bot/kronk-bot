@@ -15,6 +15,10 @@ export interface GithubComment {
   created_at: string
 }
 
+export interface GithubRepoComment extends GithubComment {
+  issueNumber: number
+}
+
 export interface GithubAppInstallation {
   installationId: number
   owner: string
@@ -83,18 +87,25 @@ export class GithubClient {
       .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, updated_at: i.updated_at }))
   }
 
-  async getOpenIssues(): Promise<GithubIssue[]> {
-    const { data } = await this.octokit.rest.issues.listForRepo({
-      owner: this.owner,
-      repo: this.repo,
-      state: 'open',
-      per_page: 100,
-    })
-    return this.mapIssues(data)
+  private mapComment(c: { id: number; user?: { login?: string } | null; body: string; created_at: string }): GithubComment {
+    return { id: c.id, user: c.user?.login ?? 'unknown', body: c.body, created_at: c.created_at }
+  }
+
+  async getIssue(issueNumber: number): Promise<GithubIssue | null> {
+    try {
+      const { data } = await this.octokit.rest.issues.get({
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: issueNumber,
+      })
+      return { number: data.number, title: data.title, body: data.body ?? null, updated_at: data.updated_at }
+    } catch {
+      return null
+    }
   }
 
   async getIssuesUpdatedSince(since: string): Promise<GithubIssue[]> {
-    const { data } = await this.octokit.rest.issues.listForRepo({
+    const data = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
       owner: this.owner,
       repo: this.repo,
       state: 'open',
@@ -105,15 +116,27 @@ export class GithubClient {
   }
 
   async getIssueComments(issueNumber: number): Promise<GithubComment[]> {
-    const { data } = await this.octokit.rest.issues.listComments({
+    const data = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
       owner: this.owner,
       repo: this.repo,
       issue_number: issueNumber,
       per_page: 100,
     })
     return data
-      .filter((c) => c.body)
-      .map((c) => ({ id: c.id, user: c.user?.login ?? 'unknown', body: c.body!, created_at: c.created_at }))
+      .filter((c): c is typeof c & { body: string } => !!c.body)
+      .map((c) => this.mapComment(c))
+  }
+
+  async listNewComments(since: string): Promise<GithubRepoComment[]> {
+    const data = await this.octokit.paginate(this.octokit.rest.issues.listCommentsForRepo, {
+      owner: this.owner,
+      repo: this.repo,
+      since,
+      per_page: 100,
+    })
+    return data
+      .filter((c): c is typeof c & { body: string } => !!c.body)
+      .map((c) => ({ ...this.mapComment(c), issueNumber: parseInt(c.issue_url.split('/').pop()!, 10) }))
   }
 
   async addComment(issueNumber: number, body: string): Promise<number> {

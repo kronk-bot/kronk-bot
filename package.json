@@ -7,7 +7,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
-    "test": "node --import tsx/esm --test src/**/*.test.ts"
+    "test": "node --experimental-test-module-mocks --import tsx/esm --test src/**/*.test.ts"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.59.0",

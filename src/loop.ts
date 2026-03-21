@@ -1,7 +1,6 @@
 import { join } from 'path'
 import type { Config } from './config.js'
-import type { GithubClient, GithubIssue, GithubComment } from './github.js'
-import type { Issue } from './storage.js'
+import type { GithubClient, GithubIssue, GithubComment, GithubRepoComment } from './github.js'
 import type { TriggerContext } from './context.js'
 import { Storage } from './storage.js'
 import { cloneOrFetch } from './git.js'
@@ -26,7 +25,7 @@ function formatComments(comments: Array<{ id: number; user: string; body: string
   return comments.map((c) => `[${c.user}]: ${c.body}`).join('\n\n')
 }
 
-function buildTriggerContext(issue: Issue, triggerText: string, comments: GithubComment[]): TriggerContext {
+function buildTriggerContext(issue: GithubIssue, triggerText: string, comments: GithubComment[]): TriggerContext {
   return {
     issueNumber: issue.number,
     title: issue.title,
@@ -36,7 +35,7 @@ function buildTriggerContext(issue: Issue, triggerText: string, comments: Github
   }
 }
 
-async function syncIssues(repo: string, issues: GithubIssue[], storage: Storage): Promise<void> {
+function syncIssues(repo: string, issues: GithubIssue[], storage: Storage): void {
   for (const issue of issues) {
     storage.upsertIssue(repo, { number: issue.number, title: issue.title, body: issue.body })
   }
@@ -44,7 +43,7 @@ async function syncIssues(repo: string, issues: GithubIssue[], storage: Storage)
 }
 
 async function processTrigger(
-  issue: Issue,
+  issue: GithubIssue,
   triggerText: string,
   comments: GithubComment[],
   ctx: LoopContext
@@ -71,7 +70,33 @@ function findBotReplyAfter(comments: GithubComment[], triggerId: number, botLogi
   return comments.find((c) => c.id > triggerId && c.user === botLogin)
 }
 
-async function scanForTriggers(ctx: LoopContext): Promise<void> {
+async function processCommentTriggers(
+  triggers: GithubRepoComment[],
+  issueNumber: number,
+  ctx: LoopContext
+): Promise<void> {
+  const { config, github, botLogin, repoFullName } = ctx
+  const [issue, allComments] = await Promise.all([github.getIssue(issueNumber), github.getIssueComments(issueNumber)])
+  if (!issue) return
+
+  for (const trigger of triggers) {
+    const botReply = findBotReplyAfter(allComments, trigger.id, botLogin)
+    if (!botReply) {
+      logger.info({ repo: repoFullName, issueNumber, commentId: trigger.id }, 'trigger found in comment')
+      await processTrigger(issue, trigger.body, allComments, ctx)
+    } else if (botReply.body === PROCESSING_MSG) {
+      const age = Date.now() - new Date(botReply.created_at).getTime()
+      if (age > config.processingTimeout) {
+        logger.warn({ repo: repoFullName, issueNumber, commentId: trigger.id }, 'recovering stale processing comment')
+        await github.editComment(botReply.id, FAILED_MSG)
+        await processTrigger(issue, trigger.body, allComments, ctx)
+      }
+    }
+    // bot has a real reply → already handled, skip
+  }
+}
+
+async function scanForTriggers(ctx: LoopContext, since: string): Promise<void> {
   const { config, github, storage, botLogin, repoFullName } = ctx
   const triggerWord = config.triggerWord
   const scanStartedAt = new Date().toISOString()
@@ -86,32 +111,18 @@ async function scanForTriggers(ctx: LoopContext): Promise<void> {
     storage.markBodyScanned(repoFullName, issue.number)
   }
 
-  // Scan comments on issues updated since last run
-  const updatedIssues = await github.getIssuesUpdatedSince(storage.getLastRunAt(repoFullName))
-  for (const ghIssue of updatedIssues) {
-    const issue = storage.getIssue(repoFullName, ghIssue.number)
-    if (!issue) continue
+  // Scan new comments across all issues/PRs since last run, grouped by issue to avoid duplicate fetches
+  const newComments = await github.listNewComments(since)
+  const triggerComments = newComments.filter((c) => c.user !== botLogin && c.body.includes(triggerWord))
 
-    const comments = await github.getIssueComments(ghIssue.number)
-    const triggerComments = comments.filter((c) => c.user !== botLogin && c.body.includes(triggerWord))
-
-    for (const trigger of triggerComments) {
-      const botReply = findBotReplyAfter(comments, trigger.id, botLogin)
-
-      if (!botReply) {
-        logger.info({ repo: repoFullName, issueNumber: issue.number, commentId: trigger.id }, 'trigger found in comment')
-        await processTrigger(issue, trigger.body, comments, ctx)
-      } else if (botReply.body === PROCESSING_MSG) {
-        const age = Date.now() - new Date(botReply.created_at).getTime()
-        if (age > config.processingTimeout) {
-          logger.warn({ repo: repoFullName, issueNumber: issue.number, commentId: trigger.id }, 'recovering stale processing comment')
-          await github.editComment(botReply.id, FAILED_MSG)
-          await processTrigger(issue, trigger.body, comments, ctx)
-        }
-      }
-      // bot has a real reply → already handled, skip
-    }
+  const byIssue = new Map<number, GithubRepoComment[]>()
+  for (const trigger of triggerComments) {
+    const group = byIssue.get(trigger.issueNumber) ?? []
+    group.push(trigger)
+    byIssue.set(trigger.issueNumber, group)
   }
+
+  await Promise.all([...byIssue.entries()].map(([issueNumber, triggers]) => processCommentTriggers(triggers, issueNumber, ctx)))
 
   storage.logRun(repoFullName, scanStartedAt)
 }
@@ -120,12 +131,14 @@ export async function pollCycle(ctx: LoopContext): Promise<void> {
   logger.info({ repo: ctx.repoFullName }, 'poll cycle starting')
 
   try {
-    await cloneOrFetch(ctx.config, ctx.repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, ctx.getToken)
+    const token = await ctx.getToken()
+    await cloneOrFetch(ctx.repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token)
   } catch (err) {
     logger.error({ repo: ctx.repoFullName, err }, 'failed to fetch repo, continuing with existing workspace')
   }
 
-  const allIssues = await ctx.github.getOpenIssues()
-  await syncIssues(ctx.repoFullName, allIssues, ctx.storage)
-  await scanForTriggers(ctx)
+  const since = ctx.storage.getLastRunAt(ctx.repoFullName)
+  const updatedIssues = await ctx.github.getIssuesUpdatedSince(since)
+  syncIssues(ctx.repoFullName, updatedIssues, ctx.storage)
+  await scanForTriggers(ctx, since)
 }

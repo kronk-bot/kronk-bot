@@ -71,11 +71,11 @@ describe('Storage', () => {
   })
 
   describe('logRun / getLastRunAt', () => {
-    it('returns a date ~1 year ago when no runs exist', () => {
+    it('returns a date ~now when no runs exist', () => {
+      const before = Date.now()
       const lastRun = new Date(storage.getLastRunAt('fresh/repo'))
-      const oneYearAgo = new Date()
-      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
-      assert.ok(Math.abs(lastRun.getTime() - oneYearAgo.getTime()) < 5000)
+      const after = Date.now()
+      assert.ok(lastRun.getTime() >= before && lastRun.getTime() <= after)
     })
 
     it('returns the most recent run timestamp', () => {

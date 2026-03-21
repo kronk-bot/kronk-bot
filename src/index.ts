@@ -44,28 +44,30 @@ async function main(): Promise<void> {
       const installations = await appClient.listAllInstallations()
       logger.info({ repos: installations.map((i) => i.fullName) }, 'discovered repos')
 
-      for (const installation of installations) {
-        const repoWorkDir = join(config.workDir, installation.owner, installation.repo)
-        mkdirSync(repoWorkDir, { recursive: true })
+      await Promise.all(
+        installations.map(async (installation) => {
+          const repoWorkDir = join(config.workDir, installation.owner, installation.repo)
+          mkdirSync(repoWorkDir, { recursive: true })
 
-        const github = await appClient.createRepoClient(installation)
-        const ctx = {
-          config,
-          github,
-          storage,
-          botLogin,
-          getToken: github.getToken.bind(github),
-          repoFullName: installation.fullName,
-          repoWorkDir,
-          repoDefaultBranch: installation.defaultBranch,
-        }
+          const github = await appClient.createRepoClient(installation)
+          const ctx = {
+            config,
+            github,
+            storage,
+            botLogin,
+            getToken: github.getToken.bind(github),
+            repoFullName: installation.fullName,
+            repoWorkDir,
+            repoDefaultBranch: installation.defaultBranch,
+          }
 
-        try {
-          await pollCycle(ctx)
-        } catch (err) {
-          logger.error({ repo: installation.fullName, err }, 'Unhandled poll cycle error')
-        }
-      }
+          try {
+            await pollCycle(ctx)
+          } catch (err) {
+            logger.error({ repo: installation.fullName, err }, 'Unhandled poll cycle error')
+          }
+        })
+      )
     } catch (err) {
       logger.error({ err }, 'Failed to list installations')
     }

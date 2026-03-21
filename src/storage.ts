@@ -73,9 +73,7 @@ export class Storage {
       | { ran_at: string }
       | undefined
     if (row) return row.ran_at
-    const oneYearAgo = new Date()
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
-    return oneYearAgo.toISOString()
+    return new Date().toISOString()
   }
 
   logRun(repo: string, ranAt: string): void {
