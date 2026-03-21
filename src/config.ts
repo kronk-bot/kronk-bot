@@ -33,7 +33,7 @@ export function loadConfig(): Config {
     openrouterApiKey: required('OPENROUTER_API_KEY'),
     baseModel,
     orchestratorModel: process.env.ORCHESTRATOR_MODEL || baseModel,
-    triggerWord: process.env.TRIGGER_WORD ?? '@kronk-pull',
+    triggerWord: process.env.TRIGGER_WORD ?? '@kronk-bot',
     dbPath: process.env.DB_PATH ?? '/data/db.sqlite',
     pollInterval: parseInt(process.env.POLL_INTERVAL ?? '300', 10) * 1000,
     processingTimeout: parseInt(process.env.PROCESSING_TIMEOUT ?? '900', 10) * 1000,

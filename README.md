@@ -1,7 +1,7 @@
 ## Hi there 👋
 
 <!--
-**kronk-pull/kronk-pull** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+**kronk-bot/kronk-bot** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
 
 Here are some ideas to get you started:
 

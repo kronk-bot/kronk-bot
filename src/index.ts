@@ -28,7 +28,7 @@ async function main(): Promise<void> {
       triggerWord: config.triggerWord,
       bot: botLogin,
     },
-    'kronk-pull starting'
+    'kronk-bot starting'
   )
 
   let running = true
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
   }
 
   storage.close()
-  logger.info('kronk-pull stopped')
+  logger.info('kronk-bot stopped')
 }
 
 main().catch((err) => {

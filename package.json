@@ -1,5 +1,5 @@
 {
-  "name": "kronk-pull",
+  "name": "kronk-bot",
   "version": "1.0.0",
   "description": "Self-driving git bot that turns open issues into merged code",
   "type": "module",

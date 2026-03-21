@@ -1,5 +1,5 @@
 services:
-  kronk-pull:
+  kronk-bot:
     build: .
     restart: unless-stopped
     environment:
@@ -14,7 +14,7 @@ services:
       MODEL: ${MODEL:-minimax/minimax-m2.5}
       ORCHESTRATOR_MODEL: ${ORCHESTRATOR_MODEL:-}
       # Trigger
-      TRIGGER_WORD: ${TRIGGER_WORD:-@kronk-pull}
+      TRIGGER_WORD: ${TRIGGER_WORD:-@kronk-bot}
       # Polling
       POLL_INTERVAL: ${POLL_INTERVAL:-300}
       # Paths (fixed inside container)
@@ -24,7 +24,7 @@ services:
       # Options
       MAIN_BRANCH: ${MAIN_BRANCH:-main}
     volumes:
-      - kronk-pull_data:/data
+      - kronk-bot_data:/data
 
 volumes:
-  kronk-pull_data:
+  kronk-bot_data:
