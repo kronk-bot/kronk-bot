@@ -8,7 +8,11 @@ import {
   createGrepTool,
   createFindTool,
   createLsTool,
+  createWriteTool,
+  createEditTool,
+  createBashTool,
 } from '@mariozechner/pi-coding-agent'
+import type { AgentTool } from '@mariozechner/pi-agent-core'
 import type { Config } from './config.js'
 import { logger } from './logger.js'
 import { stripFrontmatter } from './utils.js'
@@ -32,6 +36,7 @@ async function setupSession(
   config: Config,
   sessionDir: string,
   model: string,
+  extraTools: AgentTool[],
   sessionName?: string
 ) {
   const { authStorage, modelRegistry, resolvedModel } = resolveModel(config, model)
@@ -63,6 +68,10 @@ async function setupSession(
       createGrepTool(worktreePath),
       createFindTool(worktreePath),
       createLsTool(worktreePath),
+      createWriteTool(worktreePath),
+      createEditTool(worktreePath),
+      createBashTool(worktreePath),
+      ...extraTools,
     ],
   })
 
@@ -79,10 +88,11 @@ export async function runAgent(
   worktreePath: string,
   config: Config,
   sessionDir: string,
+  extraTools: AgentTool[],
   sessionName?: string
 ): Promise<AgentRunResult> {
   const systemPrompt = stripFrontmatter(readFileSync(agentFilePath, 'utf-8'))
-  const session = await setupSession(systemPrompt, worktreePath, config, sessionDir, model, sessionName)
+  const session = await setupSession(systemPrompt, worktreePath, config, sessionDir, model, extraTools, sessionName)
 
   const allText: string[] = []
   const bufferParts: string[] = []

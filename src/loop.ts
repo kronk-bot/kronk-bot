@@ -3,8 +3,9 @@ import type { Config } from './config.js'
 import type { GithubClient, GithubIssue, GithubComment, GithubRepoComment } from './github.js'
 import type { TriggerContext } from './context.js'
 import type { Storage } from './storage.js'
-import { cloneOrFetch } from './git.js'
+import { cloneOrFetch, createWorktree, removeWorktree } from './git.js'
 import { runAgentForIssue } from './agent.js'
+import { slugify } from './utils.js'
 import { logger } from './logger.js'
 
 const PROCESSING_MSG = '⏳ Processing...'
@@ -41,25 +42,43 @@ async function processTrigger(
   comments: GithubComment[],
   ctx: LoopContext
 ): Promise<void> {
-  const { config, github, repoFullName, repoWorkDir } = ctx
+  const { config, github, repoFullName, repoWorkDir, repoDefaultBranch } = ctx
   const processingCommentId = await github.addComment(issue.number, PROCESSING_MSG)
+
+  const branch = `kronk/${issue.number}-${slugify(issue.title)}`
+  const worktreePath = join(repoWorkDir, 'worktrees', `${issue.number}`)
+  const sessionDir = join(
+    config.piConfigDir,
+    'sessions',
+    `${repoFullName.replace('/', '-')}-${issue.number}`
+  )
+
+  try {
+    const token = await ctx.getToken()
+    await createWorktree(repoWorkDir, worktreePath, branch, token)
+  } catch (err) {
+    logger.error({ repo: repoFullName, issueNumber: issue.number, err }, 'failed to create worktree')
+    await github.editComment(processingCommentId, '❌ Processing failed.')
+    return
+  }
 
   try {
     const triggerCtx = buildTriggerContext(issue, triggerText, comments)
-    const sessionDir = join(
-      config.piConfigDir,
-      'sessions',
-      `${repoFullName.replace('/', '-')}-${issue.number}`
-    )
 
-    logger.info({ repo: repoFullName, issueNumber: issue.number }, 'running agent')
-    const response = await runAgentForIssue(triggerCtx, config, repoWorkDir, sessionDir)
+    logger.info({ repo: repoFullName, issueNumber: issue.number, branch }, 'running agent')
+    const response = await runAgentForIssue(triggerCtx, config, worktreePath, sessionDir, github, repoDefaultBranch)
 
-    await github.editComment(processingCommentId, response ?? '✅ Done.')
+    await github.editComment(processingCommentId, response)
     logger.info({ repo: repoFullName, issueNumber: issue.number }, 'posted response')
   } catch (err) {
     logger.error({ repo: repoFullName, issueNumber: issue.number, err }, 'agent failed')
     await github.editComment(processingCommentId, '❌ Processing failed.')
+  } finally {
+    try {
+      await removeWorktree(repoWorkDir, worktreePath)
+    } catch (err) {
+      logger.warn({ repo: repoFullName, issueNumber: issue.number, err }, 'failed to remove worktree')
+    }
   }
 }
 
@@ -138,14 +157,12 @@ async function scanForTriggers(ctx: LoopContext, since: string, updatedIssues: G
 export async function pollCycle(ctx: LoopContext): Promise<void> {
   logger.info({ repo: ctx.repoFullName }, 'poll cycle starting')
 
-  try {
-    const token = await ctx.getToken()
-    await cloneOrFetch(ctx.repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token)
-  } catch (err) {
-    logger.error({ repo: ctx.repoFullName, err }, 'failed to fetch repo, continuing with existing workspace')
-  }
-
   const since = ctx.storage.getLastRunAt(ctx.repoFullName)
-  const updatedIssues = await ctx.github.getIssuesUpdatedSince(since)
+  const [, updatedIssues] = await Promise.all([
+    ctx.getToken()
+      .then(token => cloneOrFetch(ctx.repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token))
+      .catch(err => logger.error({ repo: ctx.repoFullName, err }, 'failed to fetch repo, continuing with existing workspace')),
+    ctx.github.getIssuesUpdatedSince(since),
+  ])
   await scanForTriggers(ctx, since, updatedIssues)
 }

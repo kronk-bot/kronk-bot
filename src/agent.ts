@@ -2,20 +2,36 @@ import { join } from 'path'
 import { runAgent } from './agent-runner.js'
 import type { Config } from './config.js'
 import type { TriggerContext } from './context.js'
+import type { GithubClient } from './github.js'
+import { createGitCommitTool, createGitPushTool, createGhPrCreateTool } from './tools.js'
 
-export async function runAgentForIssue(ctx: TriggerContext, config: Config, workDir: string, sessionDir: string): Promise<string> {
+export async function runAgentForIssue(
+  ctx: TriggerContext,
+  config: Config,
+  worktreePath: string,
+  sessionDir: string,
+  github: GithubClient,
+  defaultBranch: string
+): Promise<string> {
+  const extraTools = [
+    createGitCommitTool(worktreePath),
+    createGitPushTool(worktreePath),
+    createGhPrCreateTool(worktreePath, github, defaultBranch),
+  ]
+
   const result = await runAgent(
     'agent',
     join(config.agentsDir, 'agent.md'),
     config.agentModel,
     ctx,
-    workDir,
+    worktreePath,
     config,
     sessionDir,
+    extraTools,
     `${ctx.issueNumber}`
   )
 
-  const { model, sessionName, tokens, cost, context, toolCalls } = result.stats
+  const { model, sessionName, tokens, cost, context } = result.stats
   const parts: string[] = []
   if (sessionName) parts.push(`**session:** ${sessionName}`)
   if (model) parts.push(`**model:** ${model}`)

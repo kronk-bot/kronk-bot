@@ -1,6 +1,29 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { stripFrontmatter } from './utils.js'
+import { slugify, stripFrontmatter } from './utils.js'
+
+describe('slugify', () => {
+  it('lowercases and replaces spaces with hyphens', () => {
+    assert.equal(slugify('Add age to user'), 'add-age-to-user')
+  })
+
+  it('collapses multiple non-alphanumeric chars into one hyphen', () => {
+    assert.equal(slugify('Fix bug: crash on load!'), 'fix-bug-crash-on-load')
+  })
+
+  it('strips leading and trailing hyphens', () => {
+    assert.equal(slugify('  hello world  '), 'hello-world')
+  })
+
+  it('truncates to 50 characters', () => {
+    const long = 'a'.repeat(60)
+    assert.equal(slugify(long).length, 50)
+  })
+
+  it('handles empty string', () => {
+    assert.equal(slugify(''), '')
+  })
+})
 
 describe('stripFrontmatter', () => {
   it('returns content unchanged when no frontmatter', () => {

@@ -157,4 +157,17 @@ export class GithubClient {
       body,
     })
   }
+
+  async createPullRequest(title: string, body: string, head: string, base: string, draft = false): Promise<string> {
+    const { data } = await this.octokit.rest.pulls.create({
+      owner: this.owner,
+      repo: this.repo,
+      title,
+      body,
+      head,
+      base,
+      draft,
+    })
+    return data.html_url
+  }
 }
