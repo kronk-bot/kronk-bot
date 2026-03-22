@@ -23,7 +23,7 @@ async function main(): Promise<void> {
 
   logger.info(
     {
-      model: config.orchestratorModel,
+      model: config.agentModel,
       pollIntervalSec: config.pollInterval / 1000,
       triggerWord: config.triggerWord,
       bot: botLogin,

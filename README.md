@@ -39,7 +39,7 @@ The `/data` volume persists the database, cloned repos, and agent sessions acros
 
 ## Customizing the agent
 
-The agent's behavior, persona, and guidelines are defined in [`agents/orchestrator.md`](agents/orchestrator.md). Edit it to change how the bot responds.
+The agent's behavior, persona, and guidelines are defined in [`agents/agent.md`](agents/agent.md). Edit it to change how the bot responds.
 
 ## Usage
 

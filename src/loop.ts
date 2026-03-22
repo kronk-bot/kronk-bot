@@ -4,7 +4,7 @@ import type { GithubClient, GithubIssue, GithubComment, GithubRepoComment } from
 import type { TriggerContext } from './context.js'
 import type { Storage } from './storage.js'
 import { cloneOrFetch } from './git.js'
-import { runOrchestrator } from './orchestrator.js'
+import { runAgentForIssue } from './agent.js'
 import { logger } from './logger.js'
 
 const PROCESSING_MSG = '⏳ Processing...'
@@ -49,16 +49,16 @@ async function processTrigger(
     const sessionDir = join(
       config.piConfigDir,
       'sessions',
-      `${repoFullName.replace('/', '-')}-${issue.number}-orchestrator`
+      `${repoFullName.replace('/', '-')}-${issue.number}`
     )
 
-    logger.info({ repo: repoFullName, issueNumber: issue.number }, 'running orchestrator')
-    const response = await runOrchestrator(triggerCtx, config, repoWorkDir, sessionDir)
+    logger.info({ repo: repoFullName, issueNumber: issue.number }, 'running agent')
+    const response = await runAgentForIssue(triggerCtx, config, repoWorkDir, sessionDir)
 
     await github.editComment(processingCommentId, response ?? '✅ Done.')
     logger.info({ repo: repoFullName, issueNumber: issue.number }, 'posted response')
   } catch (err) {
-    logger.error({ repo: repoFullName, issueNumber: issue.number, err }, 'orchestrator failed')
+    logger.error({ repo: repoFullName, issueNumber: issue.number, err }, 'agent failed')
     await github.editComment(processingCommentId, '❌ Processing failed.')
   }
 }

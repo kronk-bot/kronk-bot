@@ -10,7 +10,6 @@ services:
       # LLM
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       MODEL: ${MODEL:-minimax/minimax-m2.5}
-      ORCHESTRATOR_MODEL: ${ORCHESTRATOR_MODEL:-}
       # Trigger
       TRIGGER_WORD: ${TRIGGER_WORD:-@kronk-bot}
       # Polling

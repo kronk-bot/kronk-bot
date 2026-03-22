@@ -8,7 +8,7 @@ export interface Config {
   githubAppPrivateKey: string
   openrouterApiKey: string
   baseModel: string
-  orchestratorModel: string
+  agentModel: string
   triggerWord: string
   dbPath: string
   pollInterval: number
@@ -32,7 +32,7 @@ export function loadConfig(): Config {
     githubAppPrivateKey: required('GITHUB_APP_PRIVATE_KEY').replace(/\\n/g, '\n'),
     openrouterApiKey: required('OPENROUTER_API_KEY'),
     baseModel,
-    orchestratorModel: process.env.ORCHESTRATOR_MODEL || baseModel,
+    agentModel: process.env.AGENT_MODEL || baseModel,
     triggerWord: process.env.TRIGGER_WORD ?? '@kronk-bot',
     dbPath: process.env.DB_PATH ?? '/data/db.sqlite',
     pollInterval: parseInt(process.env.POLL_INTERVAL ?? '60', 10) * 1000,
