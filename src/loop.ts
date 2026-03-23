@@ -11,6 +11,10 @@ import { logger } from './logger.js'
 const PROCESSING_MSG = '⏳ Processing...'
 const FAILED_MSG = '❌ Processing timed out, retrying...'
 
+function isAllowed(user: string, config: Config): boolean {
+  return config.allowedUsers.length === 0 || config.allowedUsers.includes(user)
+}
+
 export interface LoopContext {
   config: Config
   github: GithubClient
@@ -26,12 +30,19 @@ function formatComments(comments: Array<{ id: number; user: string; body: string
   return comments.map((c) => `[${c.user}]: ${c.body}`).join('\n\n')
 }
 
-function buildTriggerContext(issue: GithubIssue, triggerText: string, comments: GithubComment[]): TriggerContext {
+function buildTriggerContext(
+  issue: GithubIssue,
+  triggerText: string,
+  comments: GithubComment[],
+  config: Config,
+  botLogin: string
+): TriggerContext {
+  const safeComments = comments.filter((c) => c.user === botLogin || isAllowed(c.user, config))
   return {
     issueNumber: issue.number,
     title: issue.title,
     body: issue.body ?? '',
-    comments: formatComments(comments),
+    comments: formatComments(safeComments),
     triggerText,
   }
 }
@@ -47,11 +58,7 @@ async function processTrigger(
 
   const branch = `kronk/${issue.number}-${slugify(issue.title)}`
   const worktreePath = join(repoWorkDir, 'worktrees', `${issue.number}`)
-  const sessionDir = join(
-    config.piConfigDir,
-    'sessions',
-    `${repoFullName.replace('/', '-')}-${issue.number}`
-  )
+  const sessionDir = join(config.piConfigDir, 'sessions', `${repoFullName.replace('/', '-')}-${issue.number}`)
 
   try {
     const token = await ctx.getToken()
@@ -63,7 +70,7 @@ async function processTrigger(
   }
 
   try {
-    const triggerCtx = buildTriggerContext(issue, triggerText, comments)
+    const triggerCtx = buildTriggerContext(issue, triggerText, comments, config, ctx.botLogin)
 
     logger.info({ repo: repoFullName, issueNumber: issue.number, branch }, 'running agent')
     const response = await runAgentForIssue(triggerCtx, config, worktreePath, sessionDir, github, repoDefaultBranch)
@@ -119,6 +126,13 @@ async function scanForTriggers(ctx: LoopContext, since: string, updatedIssues: G
 
   // Scan bodies of updated issues
   for (const issue of updatedIssues) {
+    if (!isAllowed(issue.user, config)) {
+      logger.info(
+        { repo: repoFullName, issueNumber: issue.number, user: issue.user },
+        'ignoring trigger from non-allowed user'
+      )
+      continue
+    }
     if (!issue.body?.includes(triggerWord)) continue
     logger.info({ repo: repoFullName, issueNumber: issue.number }, 'trigger found in issue body')
     const comments = await github.getIssueComments(issue.number)
@@ -138,7 +152,9 @@ async function scanForTriggers(ctx: LoopContext, since: string, updatedIssues: G
 
   // Scan new comments across all issues/PRs since last run, grouped by issue to avoid duplicate fetches
   const newComments = await github.listNewComments(since)
-  const triggerComments = newComments.filter((c) => c.user !== botLogin && c.body.includes(triggerWord))
+  const triggerComments = newComments.filter(
+    (c) => c.user !== botLogin && c.body.includes(triggerWord) && isAllowed(c.user, config)
+  )
 
   const byIssue = new Map<number, GithubRepoComment[]>()
   for (const trigger of triggerComments) {
@@ -159,9 +175,12 @@ export async function pollCycle(ctx: LoopContext): Promise<void> {
 
   const since = ctx.storage.getLastRunAt(ctx.repoFullName)
   const [, updatedIssues] = await Promise.all([
-    ctx.getToken()
-      .then(token => cloneOrFetch(ctx.repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token))
-      .catch(err => logger.error({ repo: ctx.repoFullName, err }, 'failed to fetch repo, continuing with existing workspace')),
+    ctx
+      .getToken()
+      .then((token) => cloneOrFetch(ctx.repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token))
+      .catch((err) =>
+        logger.error({ repo: ctx.repoFullName, err }, 'failed to fetch repo, continuing with existing workspace')
+      ),
     ctx.github.getIssuesUpdatedSince(since),
   ])
   await scanForTriggers(ctx, since, updatedIssues)

@@ -12,6 +12,7 @@ services:
       MODEL: ${MODEL:-minimax/minimax-m2.5}
       # Trigger
       TRIGGER_WORD: ${TRIGGER_WORD:-@kronk-bot}
+      ALLOWED_USERS: ${ALLOWED_USERS:-}
       # Polling
       POLL_INTERVAL: ${POLL_INTERVAL:-60}
       # Paths (fixed inside container)

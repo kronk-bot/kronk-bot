@@ -5,6 +5,7 @@ export interface GithubIssue {
   number: number
   title: string
   body: string | null
+  user: string
   updated_at: string
 }
 
@@ -81,10 +82,10 @@ export class GithubClient {
     return token
   }
 
-  private mapIssues(data: Array<{ number: number; title: string; body?: string | null; updated_at: string; user?: { type?: string } | null }>): GithubIssue[] {
+  private mapIssues(data: Array<{ number: number; title: string; body?: string | null; updated_at: string; user?: { type?: string; login?: string } | null }>): GithubIssue[] {
     return data
       .filter((i) => i.user?.type !== 'Bot')
-      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, updated_at: i.updated_at }))
+      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, user: i.user?.login ?? 'unknown', updated_at: i.updated_at }))
   }
 
   private mapComment(c: { id: number; user?: { login?: string } | null; body: string; created_at: string }): GithubComment {
@@ -98,7 +99,7 @@ export class GithubClient {
         repo: this.repo,
         issue_number: issueNumber,
       })
-      return { number: data.number, title: data.title, body: data.body ?? null, updated_at: data.updated_at }
+      return { number: data.number, title: data.title, body: data.body ?? null, user: data.user?.login ?? 'unknown', updated_at: data.updated_at }
     } catch {
       return null
     }

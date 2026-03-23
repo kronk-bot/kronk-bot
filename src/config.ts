@@ -10,6 +10,7 @@ export interface Config {
   baseModel: string
   agentModel: string
   triggerWord: string
+  allowedUsers: string[]
   dbPath: string
   pollInterval: number
   processingTimeout: number
@@ -34,6 +35,7 @@ export function loadConfig(): Config {
     baseModel,
     agentModel: process.env.AGENT_MODEL || baseModel,
     triggerWord: process.env.TRIGGER_WORD ?? '@kronk-bot',
+    allowedUsers: process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map((s) => s.trim()).filter(Boolean) : [],
     dbPath: process.env.DB_PATH ?? '/data/db.sqlite',
     pollInterval: parseInt(process.env.POLL_INTERVAL ?? '60', 10) * 1000,
     processingTimeout: parseInt(process.env.PROCESSING_TIMEOUT ?? '900', 10) * 1000,
