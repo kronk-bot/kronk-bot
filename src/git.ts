@@ -29,15 +29,17 @@ export async function cloneOrFetch(repo: string, workDir: string, branch: string
   await git.reset(ResetMode.HARD, [`origin/${branch}`])
 }
 
-export async function createWorktree(repoDir: string, worktreePath: string, branch: string, token: string): Promise<void> {
+export async function createWorktree(repoDir: string, worktreePath: string, branch: string, token: string, startPoint?: string): Promise<void> {
   const { config, header } = encodeToken(token)
   const git = simpleGit({ baseDir: repoDir, config })
 
   // Clean up any leftover worktree from a previous failed run before creating
   await git.raw(['worktree', 'remove', '--force', worktreePath]).catch(() => {})
 
-  // -B creates the branch if new, or resets it to HEAD if it already exists
-  await git.raw(['worktree', 'add', '-B', branch, worktreePath])
+  // -B creates the branch if new, or resets it to the given start point (or HEAD) if it already exists
+  const args = ['worktree', 'add', '-B', branch, worktreePath]
+  if (startPoint) args.push(startPoint)
+  await git.raw(args)
 
   // Bake auth into the worktree's local git config so the agent can push without needing the token.
   // Empty string first clears any auth from credential helpers, then sets ours.
@@ -46,6 +48,29 @@ export async function createWorktree(repoDir: string, worktreePath: string, bran
   await worktreeGit.raw(['config', '--add', 'http.extraHeader', header])
 
   logger.info({ branch, worktreePath }, 'Created worktree')
+}
+
+export async function getCurrentBranch(worktreePath: string): Promise<string> {
+  const git = simpleGit({ baseDir: worktreePath })
+  const head = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim()
+  return head
+}
+
+export async function commitAndPush(
+  worktreePath: string,
+  commitMessage: string,
+  issueNumber: number
+): Promise<void> {
+  const git = simpleGit({ baseDir: worktreePath })
+  await git.addConfig('user.email', 'kronk-bot@users.noreply.github.com')
+  await git.addConfig('user.name', 'kronk-bot')
+  await git.add('.')
+  const status = await git.status()
+  if (status.staged.length > 0) {
+    await git.commit(commitMessage)
+  }
+  await git.push('origin', 'HEAD', ['--set-upstream'])
+  logger.info({ issueNumber, commitMessage }, 'committed and pushed')
 }
 
 export async function removeWorktree(repoDir: string, worktreePath: string): Promise<void> {

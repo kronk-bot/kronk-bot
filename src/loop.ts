@@ -1,15 +1,15 @@
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import type { Config } from './config.js'
-import type { GithubClient, GithubIssue, GithubComment, GithubRepoComment } from './github.js'
-import type { TriggerContext } from './context.js'
-import type { Storage } from './storage.js'
-import { cloneOrFetch, createWorktree, removeWorktree } from './git.js'
+import type { GithubClient, GithubIssue, GithubRepoComment } from './github.js'
+import type { Storage, Trigger, NewTriggerData } from './storage.js'
+import { cloneOrFetch } from './git.js'
 import { runAgentForIssue } from './agent.js'
-import { slugify } from './utils.js'
 import { logger } from './logger.js'
 
-const PROCESSING_MSG = '⏳ Processing...'
-const FAILED_MSG = '❌ Processing timed out, retrying...'
+const MSG_PROCESSING = '⏳ Processing...'
+const MSG_FAILED = '❌ Processing failed.'
+
 
 function isAllowed(user: string, config: Config): boolean {
   return config.allowedUsers.length === 0 || config.allowedUsers.includes(user)
@@ -26,162 +26,148 @@ export interface LoopContext {
   repoDefaultBranch: string
 }
 
-function formatComments(comments: Array<{ id: number; user: string; body: string }>): string {
-  return comments.map((c) => `[${c.user}]: ${c.body}`).join('\n\n')
-}
-
-function buildTriggerContext(
-  issue: GithubIssue,
-  triggerText: string,
-  comments: GithubComment[],
-  config: Config,
-  botLogin: string
-): TriggerContext {
-  const safeComments = comments.filter((c) => c.user === botLogin || isAllowed(c.user, config))
-  return {
-    issueNumber: issue.number,
-    title: issue.title,
-    body: issue.body ?? '',
-    comments: formatComments(safeComments),
-    triggerText,
-  }
-}
-
-async function processTrigger(
-  issue: GithubIssue,
-  triggerText: string,
-  comments: GithubComment[],
-  ctx: LoopContext
-): Promise<void> {
-  const { config, github, repoFullName, repoWorkDir, repoDefaultBranch } = ctx
-  const processingCommentId = await github.addComment(issue.number, PROCESSING_MSG)
-
-  const branch = `kronk/${issue.number}-${slugify(issue.title)}`
-  const worktreePath = join(repoWorkDir, 'worktrees', `${issue.number}`)
-  const sessionDir = join(config.piConfigDir, 'sessions', `${repoFullName.replace('/', '-')}-${issue.number}`)
-
-  try {
-    const token = await ctx.getToken()
-    await createWorktree(repoWorkDir, worktreePath, branch, token)
-  } catch (err) {
-    logger.error({ repo: repoFullName, issueNumber: issue.number, err }, 'failed to create worktree')
-    await github.editComment(processingCommentId, '❌ Processing failed.')
-    return
-  }
-
-  try {
-    const triggerCtx = buildTriggerContext(issue, triggerText, comments, config, ctx.botLogin)
-
-    logger.info({ repo: repoFullName, issueNumber: issue.number, branch }, 'running agent')
-    const response = await runAgentForIssue(triggerCtx, config, worktreePath, sessionDir, github, repoDefaultBranch)
-
-    await github.editComment(processingCommentId, response)
-    logger.info({ repo: repoFullName, issueNumber: issue.number }, 'posted response')
-  } catch (err) {
-    logger.error({ repo: repoFullName, issueNumber: issue.number, err }, 'agent failed')
-    await github.editComment(processingCommentId, '❌ Processing failed.')
-  } finally {
-    try {
-      await removeWorktree(repoWorkDir, worktreePath)
-    } catch (err) {
-      logger.warn({ repo: repoFullName, issueNumber: issue.number, err }, 'failed to remove worktree')
-    }
-  }
-}
-
-function findBotReplyAfter(comments: GithubComment[], triggerId: number, botLogin: string): GithubComment | undefined {
-  return comments.find((c) => c.id > triggerId && c.user === botLogin)
-}
-
-async function processCommentTriggers(
-  triggers: GithubRepoComment[],
-  issueNumber: number,
-  ctx: LoopContext
-): Promise<void> {
-  const { config, github, botLogin, repoFullName } = ctx
-  const [issue, allComments] = await Promise.all([github.getIssue(issueNumber), github.getIssueComments(issueNumber)])
-  if (!issue) return
-
-  for (const trigger of triggers) {
-    const botReply = findBotReplyAfter(allComments, trigger.id, botLogin)
-    if (!botReply) {
-      logger.info({ repo: repoFullName, issueNumber, commentId: trigger.id }, 'trigger found in comment')
-      await processTrigger(issue, trigger.body, allComments, ctx)
-    } else if (botReply.body === PROCESSING_MSG) {
-      const age = Date.now() - new Date(botReply.created_at).getTime()
-      if (age > config.processingTimeout) {
-        logger.warn({ repo: repoFullName, issueNumber, commentId: trigger.id }, 'recovering stale processing comment')
-        await github.editComment(botReply.id, FAILED_MSG)
-        await processTrigger(issue, trigger.body, allComments, ctx)
-      }
-    }
-    // bot has a real reply → already handled, skip
-  }
-}
-
-async function scanForTriggers(ctx: LoopContext, since: string, updatedIssues: GithubIssue[]): Promise<void> {
-  const { config, github, storage, botLogin, repoFullName } = ctx
+async function fetchBodyTriggers(ctx: LoopContext, since: string): Promise<NewTriggerData[]> {
+  const { config, github, repoFullName } = ctx
   const triggerWord = config.triggerWord
-  const scanStartedAt = new Date().toISOString()
+  const updatedIssues = await github.getIssuesUpdatedSince(since)
+  const results: NewTriggerData[] = []
 
-  // Scan bodies of updated issues
   for (const issue of updatedIssues) {
-    if (!isAllowed(issue.user, config)) {
-      logger.info(
-        { repo: repoFullName, issueNumber: issue.number, user: issue.user },
-        'ignoring trigger from non-allowed user'
-      )
-      continue
-    }
+    if (!isAllowed(issue.user, config)) continue
     if (!issue.body?.includes(triggerWord)) continue
-    logger.info({ repo: repoFullName, issueNumber: issue.number }, 'trigger found in issue body')
-    const comments = await github.getIssueComments(issue.number)
-    const botReply = comments.find((c) => c.user === botLogin)
-    if (!botReply) {
-      await processTrigger(issue, issue.body, comments, ctx)
-    } else if (botReply.body === PROCESSING_MSG) {
-      const age = Date.now() - new Date(botReply.created_at).getTime()
-      if (age > config.processingTimeout) {
-        logger.warn({ repo: repoFullName, issueNumber: issue.number }, 'recovering stale processing comment')
-        await github.editComment(botReply.id, FAILED_MSG)
-        await processTrigger(issue, issue.body, comments, ctx)
-      }
-    }
-    // bot has a real reply → already handled, skip
+    results.push({
+      id: randomUUID(),
+      repo: repoFullName,
+      source_type: issue.isPR ? 'pr_body' : 'issue_body',
+      source_id: String(issue.number),
+      issue_number: issue.number,
+      is_pr: issue.isPR,
+      trigger_text: issue.body,
+      created_at: issue.updated_at,
+    })
   }
 
-  // Scan new comments across all issues/PRs since last run, grouped by issue to avoid duplicate fetches
+  return results
+}
+
+async function fetchCommentTriggers(ctx: LoopContext, since: string): Promise<NewTriggerData[]> {
+  const { config, github, botLogin, repoFullName } = ctx
+  const triggerWord = config.triggerWord
+
   const newComments = await github.listNewComments(since)
   const triggerComments = newComments.filter(
     (c) => c.user !== botLogin && c.body.includes(triggerWord) && isAllowed(c.user, config)
   )
 
   const byIssue = new Map<number, GithubRepoComment[]>()
-  for (const trigger of triggerComments) {
-    const group = byIssue.get(trigger.issueNumber) ?? []
-    group.push(trigger)
-    byIssue.set(trigger.issueNumber, group)
+  for (const comment of triggerComments) {
+    const group = byIssue.get(comment.issueNumber) ?? []
+    group.push(comment)
+    byIssue.set(comment.issueNumber, group)
   }
 
-  await Promise.all(
-    [...byIssue.entries()].map(([issueNumber, triggers]) => processCommentTriggers(triggers, issueNumber, ctx))
+  const grouped = await Promise.all(
+    [...byIssue.entries()].map(async ([issueNumber, comments]) => {
+      const issue = await github.getIssue(issueNumber)
+      if (!issue) {
+        logger.warn({ repo: repoFullName, issueNumber }, 'issue not found, skipping comment triggers')
+        return []
+      }
+      return comments.map((comment): NewTriggerData => ({
+        id: randomUUID(),
+        repo: repoFullName,
+        source_type: issue.isPR ? 'pr_comment' : 'issue_comment',
+        source_id: String(comment.id),
+        issue_number: issueNumber,
+        is_pr: issue.isPR,
+        trigger_text: comment.body,
+        created_at: comment.created_at,
+      }))
+    })
   )
 
-  storage.recordRun(repoFullName, scanStartedAt)
+  return grouped.flat()
+}
+
+async function processSingleTrigger(trigger: Trigger, ctx: LoopContext): Promise<void> {
+  const { config, github, storage, repoFullName, repoWorkDir, repoDefaultBranch } = ctx
+
+  const issue = await github.getIssue(trigger.issue_number)
+  if (!issue) {
+    storage.markFailed(trigger.id, new Date().toISOString(), 'issue not found')
+    return
+  }
+
+  let placeholderCommentId: number
+  if (trigger.placeholder_comment_id) {
+    placeholderCommentId = trigger.placeholder_comment_id
+    await github.editComment(placeholderCommentId, MSG_PROCESSING)
+  } else {
+    placeholderCommentId = await github.addComment(trigger.issue_number, MSG_PROCESSING)
+  }
+  const now = new Date().toISOString()
+  storage.markProcessing(trigger.id, now, placeholderCommentId)
+
+  const outputFile = join(repoWorkDir, `kronk-output-${trigger.id}.json`)
+  const sessionDir = join(config.piConfigDir, 'sessions', `${repoFullName.replace('/', '-')}-${trigger.issue_number}`)
+
+  const triggerCtx = {
+    issueNumber: trigger.issue_number,
+    title: issue.title,
+    body: issue.body ?? '',
+    comments: '',
+    triggerText: trigger.trigger_text,
+    triggerSource: (trigger.is_pr ? 'pr' : 'issue') as 'issue' | 'pr',
+    processingCommentId: placeholderCommentId,
+    outputFile,
+    pullRequests: [],
+    checkRuns: undefined,
+  }
+
+  try {
+    logger.info({ repo: repoFullName, issueNumber: trigger.issue_number, triggerId: trigger.id }, 'running agent')
+    await runAgentForIssue(triggerCtx, config, repoWorkDir, sessionDir, github, repoDefaultBranch)
+    storage.markDone(trigger.id, new Date().toISOString())
+    logger.info({ repo: repoFullName, issueNumber: trigger.issue_number }, 'agent done')
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error({ repo: repoFullName, issueNumber: trigger.issue_number, err }, 'agent failed')
+    storage.markFailed(trigger.id, new Date().toISOString(), msg)
+    await github.editComment(placeholderCommentId, MSG_FAILED)
+  }
 }
 
 export async function pollCycle(ctx: LoopContext): Promise<void> {
   logger.info({ repo: ctx.repoFullName }, 'poll cycle starting')
 
-  const since = ctx.storage.getLastRunAt(ctx.repoFullName)
-  const [, updatedIssues] = await Promise.all([
-    ctx
-      .getToken()
-      .then((token) => cloneOrFetch(ctx.repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token))
-      .catch((err) =>
-        logger.error({ repo: ctx.repoFullName, err }, 'failed to fetch repo, continuing with existing workspace')
-      ),
-    ctx.github.getIssuesUpdatedSince(since),
+  const { config, github, storage, repoFullName } = ctx
+  const since = storage.getLastRunAt(repoFullName)
+  const scanStartedAt = new Date().toISOString()
+
+  // Phase 1: parallel reads — no storage writes
+  const [staleTriggers, bodyTriggers, commentTriggers] = await Promise.all([
+    storage.getStaleTriggers(repoFullName, config.processingTimeout),
+    fetchBodyTriggers(ctx, since),
+    fetchCommentTriggers(ctx, since),
   ])
-  await scanForTriggers(ctx, since, updatedIssues)
+
+  const newTriggers = [...bodyTriggers, ...commentTriggers]
+  const hasWork = staleTriggers.length > 0 || newTriggers.length > 0
+
+  // Phase 2: advance scan cursor (before any slow work)
+  storage.recordRun(repoFullName, scanStartedAt)
+
+  if (!hasWork) return
+
+  // Phase 3: atomic persist — reset stale + insert new triggers in a single transaction
+  storage.recoverStaleAndInsert(repoFullName, staleTriggers.map((t) => t.id), newTriggers)
+
+  // Phase 4: fetch repo
+  await ctx.getToken()
+    .then((token) => cloneOrFetch(repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token))
+    .catch((err) => logger.error({ repo: repoFullName, err }, 'failed to fetch repo, continuing with existing workspace'))
+
+  // Phase 5: process all pending triggers in parallel
+  const pending = storage.getPendingTriggers(repoFullName)
+  await Promise.all(pending.map((t) => processSingleTrigger(t, ctx)))
 }

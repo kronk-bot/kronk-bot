@@ -7,6 +7,8 @@ export interface GithubIssue {
   body: string | null
   user: string
   updated_at: string
+  state: 'open' | 'closed'
+  isPR: boolean
 }
 
 export interface GithubComment {
@@ -18,6 +20,15 @@ export interface GithubComment {
 
 export interface GithubRepoComment extends GithubComment {
   issueNumber: number
+}
+
+export interface PullRequestInfo {
+  number: number
+  title: string
+  body: string
+  state: 'open' | 'closed' | 'merged'
+  branch: string
+  url: string
 }
 
 export interface GithubAppInstallation {
@@ -82,10 +93,10 @@ export class GithubClient {
     return token
   }
 
-  private mapIssues(data: Array<{ number: number; title: string; body?: string | null; updated_at: string; user?: { type?: string; login?: string } | null }>): GithubIssue[] {
+  private mapIssues(data: Array<{ number: number; title: string; body?: string | null; updated_at: string; state: string; user?: { type?: string; login?: string } | null; pull_request?: unknown }>): GithubIssue[] {
     return data
       .filter((i) => i.user?.type !== 'Bot')
-      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, user: i.user?.login ?? 'unknown', updated_at: i.updated_at }))
+      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, user: i.user?.login ?? 'unknown', updated_at: i.updated_at, state: i.state === 'open' ? 'open' : 'closed', isPR: !!i.pull_request }))
   }
 
   private mapComment(c: { id: number; user?: { login?: string } | null; body: string; created_at: string }): GithubComment {
@@ -99,7 +110,7 @@ export class GithubClient {
         repo: this.repo,
         issue_number: issueNumber,
       })
-      return { number: data.number, title: data.title, body: data.body ?? null, user: data.user?.login ?? 'unknown', updated_at: data.updated_at }
+      return { number: data.number, title: data.title, body: data.body ?? null, user: data.user?.login ?? 'unknown', updated_at: data.updated_at, state: data.state === 'open' ? 'open' : 'closed', isPR: !!data.pull_request }
     } catch {
       return null
     }
@@ -155,6 +166,98 @@ export class GithubClient {
       owner: this.owner,
       repo: this.repo,
       comment_id: commentId,
+      body,
+    })
+  }
+
+  async deleteBranch(branch: string): Promise<void> {
+    await this.octokit.rest.git.deleteRef({
+      owner: this.owner,
+      repo: this.repo,
+      ref: `heads/${branch}`,
+    }).catch(() => {}) // ignore if branch doesn't exist
+  }
+
+  async getPullRequestInfo(prNumber: number): Promise<PullRequestInfo | null> {
+    try {
+      const { data: pr } = await this.octokit.rest.pulls.get({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: prNumber,
+      })
+      return {
+        number: pr.number,
+        title: pr.title,
+        body: pr.body ?? '',
+        state: pr.merged_at ? 'merged' : pr.state === 'closed' ? 'closed' : 'open',
+        branch: pr.head.ref,
+        url: pr.html_url,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  async listBotPullRequestsForIssue(issueNumber: number, botLogin: string): Promise<PullRequestInfo[]> {
+    const prefix = `kronk/${issueNumber}-`
+    const data = await this.octokit.paginate(this.octokit.rest.pulls.list, {
+      owner: this.owner,
+      repo: this.repo,
+      state: 'all',
+      per_page: 100,
+    })
+    return data
+      .filter((pr) => pr.user?.login === botLogin && pr.head.ref.startsWith(prefix))
+      .map((pr) => ({
+        number: pr.number,
+        title: pr.title,
+        body: pr.body ?? '',
+        state: pr.merged_at ? 'merged' : pr.state === 'closed' ? 'closed' : 'open',
+        branch: pr.head.ref,
+        url: pr.html_url,
+      }))
+  }
+
+  async getPullRequestBranch(prNumber: number): Promise<string | null> {
+    try {
+      const { data } = await this.octokit.rest.pulls.get({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: prNumber,
+      })
+      return data.head.ref
+    } catch {
+      return null
+    }
+  }
+
+  async getCheckRuns(prNumber: number): Promise<{ name: string; status: string; conclusion: string | null; output: string | null }[]> {
+    const { data: pr } = await this.octokit.rest.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: prNumber,
+    })
+    const ref = pr.head.sha
+    const data = await this.octokit.paginate(this.octokit.rest.checks.listForRef, {
+      owner: this.owner,
+      repo: this.repo,
+      ref,
+      per_page: 100,
+    })
+    return data.map((run) => ({
+      name: run.name,
+      status: run.status,
+      conclusion: run.conclusion ?? null,
+      output: run.output?.summary ? run.output.summary.slice(0, 2000) : null,
+    }))
+  }
+
+  async updatePullRequest(prNumber: number, title: string, body: string): Promise<void> {
+    await this.octokit.rest.pulls.update({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: prNumber,
+      title,
       body,
     })
   }

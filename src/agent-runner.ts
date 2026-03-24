@@ -5,18 +5,18 @@ import {
   SessionManager,
   SettingsManager,
   createReadTool,
-  createGrepTool,
-  createFindTool,
   createLsTool,
   createWriteTool,
   createEditTool,
-  createBashTool,
 } from '@mariozechner/pi-coding-agent'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import type { Config } from './config.js'
 import { logger } from './logger.js'
 import { stripFrontmatter } from './utils.js'
 import { resolveModel } from './model.js'
+import { createGitBlockedBashTool, createWriteOutputTool } from './tools.js'
+
+const MAX_LOG_ARGS_LENGTH = 200
 
 export interface AgentRunResult {
   text: string
@@ -30,14 +30,24 @@ export interface AgentRunResult {
   }
 }
 
+function createFileTools(worktreePath: string): AgentTool<any>[] {
+  return [
+    createReadTool(worktreePath),
+    createLsTool(worktreePath),
+    createWriteTool(worktreePath),
+    createEditTool(worktreePath),
+  ]
+}
+
 async function setupSession(
   systemPrompt: string,
   worktreePath: string,
   config: Config,
   sessionDir: string,
   model: string,
-  extraTools: AgentTool[],
-  sessionName?: string
+  sessionName?: string,
+  additionalCustomTools?: AgentTool<any>[],
+  outputFilePath?: string
 ) {
   const { authStorage, modelRegistry, resolvedModel } = resolveModel(config, model)
 
@@ -63,21 +73,52 @@ async function setupSession(
     resourceLoader: loader,
     sessionManager: SessionManager.continueRecent(worktreePath, sessionDir),
     settingsManager,
-    tools: [
-      createReadTool(worktreePath),
-      createGrepTool(worktreePath),
-      createFindTool(worktreePath),
-      createLsTool(worktreePath),
-      createWriteTool(worktreePath),
-      createEditTool(worktreePath),
-      createBashTool(worktreePath),
-      ...extraTools,
-    ],
+    tools: createFileTools(worktreePath),
+    customTools: [
+      createGitBlockedBashTool(worktreePath),
+      ...(outputFilePath ? [createWriteOutputTool(outputFilePath)] : []),
+      ...(additionalCustomTools ?? []),
+    ] as any[],
   })
 
   if (sessionName) session.setSessionName(sessionName)
 
   return session
+}
+
+function subscribeToSessionEvents(
+  session: { subscribe: (handler: (event: any) => void) => void },
+  agentName: string,
+  completedMessages: string[]
+) {
+  const textBuffer: string[] = []
+  session.subscribe((event) => {
+    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
+      textBuffer.push(event.assistantMessageEvent.delta)
+    }
+
+    if (event.type === 'tool_execution_start') {
+      logger.info(
+        {
+          agent: agentName,
+          tool: event.toolName,
+          args: JSON.stringify(event.args).slice(0, MAX_LOG_ARGS_LENGTH),
+        },
+        'tool execution'
+      )
+    }
+
+    if (event.type === 'message_end') {
+      const trimmed = textBuffer.join('').trim()
+      textBuffer.length = 0
+      if (trimmed) {
+        completedMessages.push(trimmed)
+        for (const line of trimmed.split('\n')) {
+          if (line.trim()) logger.info({ agent: agentName }, line)
+        }
+      }
+    }
+  })
 }
 
 export async function runAgent(
@@ -88,41 +129,15 @@ export async function runAgent(
   worktreePath: string,
   config: Config,
   sessionDir: string,
-  extraTools: AgentTool[],
-  sessionName?: string
+  sessionName?: string,
+  additionalCustomTools?: AgentTool<any>[],
+  outputFilePath?: string
 ): Promise<AgentRunResult> {
   const systemPrompt = stripFrontmatter(readFileSync(agentFilePath, 'utf-8'))
-  const session = await setupSession(systemPrompt, worktreePath, config, sessionDir, model, extraTools, sessionName)
+  const session = await setupSession(systemPrompt, worktreePath, config, sessionDir, model, sessionName, additionalCustomTools, outputFilePath)
 
-  const allText: string[] = []
-  const bufferParts: string[] = []
-  session.subscribe((event) => {
-    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-      bufferParts.push(event.assistantMessageEvent.delta)
-    }
-
-    if (event.type === 'tool_execution_start') {
-      logger.debug(
-        {
-          agent: name,
-          tool: event.toolName,
-          args: JSON.stringify(event.args).slice(0, 200),
-        },
-        'tool execution'
-      )
-    }
-
-    if (event.type === 'message_end') {
-      const trimmed = bufferParts.join('').trim()
-      bufferParts.length = 0
-      if (trimmed) {
-        allText.push(trimmed)
-        for (const line of trimmed.split('\n')) {
-          if (line.trim()) logger.info({ agent: name }, line)
-        }
-      }
-    }
-  })
+  const completedMessages: string[] = []
+  subscribeToSessionEvents(session, name, completedMessages)
 
   try {
     await session.prompt(JSON.stringify(input))
@@ -134,7 +149,7 @@ export async function runAgent(
   const context = session.getContextUsage() ?? { tokens: null, contextWindow: 0, percent: null }
 
   return {
-    text: allText.join('\n\n'),
+    text: completedMessages.join('\n\n'),
     stats: {
       model: session.model?.id,
       sessionName: session.sessionName,
