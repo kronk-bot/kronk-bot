@@ -4,12 +4,8 @@ import type { Config } from './config.js'
 import type { GithubClient, GithubIssue, GithubRepoComment } from './github.js'
 import type { Storage, Trigger, NewTriggerData } from './storage.js'
 import { cloneOrFetch } from './git.js'
-import { runAgentForIssue } from './agent.js'
+import { Orchestrator } from './orchestrator.js'
 import { logger } from './logger.js'
-
-const MSG_PROCESSING = '⏳ Processing...'
-const MSG_FAILED = '❌ Processing failed.'
-
 
 function isAllowed(user: string, config: Config): boolean {
   return config.allowedUsers.length === 0 || config.allowedUsers.includes(user)
@@ -73,16 +69,18 @@ async function fetchCommentTriggers(ctx: LoopContext, since: string): Promise<Ne
         logger.warn({ repo: repoFullName, issueNumber }, 'issue not found, skipping comment triggers')
         return []
       }
-      return comments.map((comment): NewTriggerData => ({
-        id: randomUUID(),
-        repo: repoFullName,
-        source_type: issue.isPR ? 'pr_comment' : 'issue_comment',
-        source_id: String(comment.id),
-        issue_number: issueNumber,
-        is_pr: issue.isPR,
-        trigger_text: comment.body,
-        created_at: comment.created_at,
-      }))
+      return comments.map(
+        (comment): NewTriggerData => ({
+          id: randomUUID(),
+          repo: repoFullName,
+          source_type: issue.isPR ? 'pr_comment' : 'issue_comment',
+          source_id: String(comment.id),
+          issue_number: issueNumber,
+          is_pr: issue.isPR,
+          trigger_text: comment.body,
+          created_at: comment.created_at,
+        })
+      )
     })
   )
 
@@ -90,50 +88,33 @@ async function fetchCommentTriggers(ctx: LoopContext, since: string): Promise<Ne
 }
 
 async function processSingleTrigger(trigger: Trigger, ctx: LoopContext): Promise<void> {
-  const { config, github, storage, repoFullName, repoWorkDir, repoDefaultBranch } = ctx
+  const { config, github, storage, repoFullName, repoWorkDir } = ctx
 
-  const issue = await github.getIssue(trigger.issue_number)
-  if (!issue) {
-    storage.markFailed(trigger.id, new Date().toISOString(), 'issue not found')
-    return
-  }
-
-  let placeholderCommentId: number
-  if (trigger.placeholder_comment_id) {
-    placeholderCommentId = trigger.placeholder_comment_id
-    await github.editComment(placeholderCommentId, MSG_PROCESSING)
-  } else {
-    placeholderCommentId = await github.addComment(trigger.issue_number, MSG_PROCESSING)
-  }
   const now = new Date().toISOString()
-  storage.markProcessing(trigger.id, now, placeholderCommentId)
+  storage.markProcessing(trigger.id, now)
 
-  const outputFile = join(repoWorkDir, `kronk-output-${trigger.id}.json`)
   const sessionDir = join(config.piConfigDir, 'sessions', `${repoFullName.replace('/', '-')}-${trigger.issue_number}`)
 
   const triggerCtx = {
     issueNumber: trigger.issue_number,
-    title: issue.title,
-    body: issue.body ?? '',
-    comments: '',
     triggerText: trigger.trigger_text,
     triggerSource: (trigger.is_pr ? 'pr' : 'issue') as 'issue' | 'pr',
-    processingCommentId: placeholderCommentId,
-    outputFile,
-    pullRequests: [],
-    checkRuns: undefined,
+    triggerId: trigger.id,
   }
 
   try {
-    logger.info({ repo: repoFullName, issueNumber: trigger.issue_number, triggerId: trigger.id }, 'running agent')
-    await runAgentForIssue(triggerCtx, config, repoWorkDir, sessionDir, github, repoDefaultBranch)
+    logger.info(
+      { repo: repoFullName, issueNumber: trigger.issue_number, triggerId: trigger.id },
+      'running orchestrator'
+    )
+    const orchestrator = new Orchestrator(config, github, repoWorkDir, sessionDir, storage)
+    await orchestrator.run(triggerCtx)
     storage.markDone(trigger.id, new Date().toISOString())
-    logger.info({ repo: repoFullName, issueNumber: trigger.issue_number }, 'agent done')
+    logger.info({ repo: repoFullName, issueNumber: trigger.issue_number }, 'orchestrator done')
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    logger.error({ repo: repoFullName, issueNumber: trigger.issue_number, err }, 'agent failed')
+    logger.error({ repo: repoFullName, issueNumber: trigger.issue_number, err }, 'orchestrator failed')
     storage.markFailed(trigger.id, new Date().toISOString(), msg)
-    await github.editComment(placeholderCommentId, MSG_FAILED)
   }
 }
 
@@ -160,12 +141,19 @@ export async function pollCycle(ctx: LoopContext): Promise<void> {
   if (!hasWork) return
 
   // Phase 3: atomic persist — reset stale + insert new triggers in a single transaction
-  storage.recoverStaleAndInsert(repoFullName, staleTriggers.map((t) => t.id), newTriggers)
+  storage.recoverStaleAndInsert(
+    repoFullName,
+    staleTriggers.map((t) => t.id),
+    newTriggers
+  )
 
-  // Phase 4: fetch repo
-  await ctx.getToken()
+  // Phase 4: fetch repo (explorer needs access to the codebase)
+  await ctx
+    .getToken()
     .then((token) => cloneOrFetch(repoFullName, ctx.repoWorkDir, ctx.repoDefaultBranch, token))
-    .catch((err) => logger.error({ repo: repoFullName, err }, 'failed to fetch repo, continuing with existing workspace'))
+    .catch((err) =>
+      logger.error({ repo: repoFullName, err }, 'failed to fetch repo, continuing with existing workspace')
+    )
 
   // Phase 5: process all pending triggers in parallel
   const pending = storage.getPendingTriggers(repoFullName)

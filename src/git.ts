@@ -29,7 +29,13 @@ export async function cloneOrFetch(repo: string, workDir: string, branch: string
   await git.reset(ResetMode.HARD, [`origin/${branch}`])
 }
 
-export async function createWorktree(repoDir: string, worktreePath: string, branch: string, token: string, startPoint?: string): Promise<void> {
+export async function createWorktree(
+  repoDir: string,
+  worktreePath: string,
+  branch: string,
+  token: string,
+  startPoint?: string
+): Promise<void> {
   const { config, header } = encodeToken(token)
   const git = simpleGit({ baseDir: repoDir, config })
 
@@ -56,11 +62,7 @@ export async function getCurrentBranch(worktreePath: string): Promise<string> {
   return head
 }
 
-export async function commitAndPush(
-  worktreePath: string,
-  commitMessage: string,
-  issueNumber: number
-): Promise<void> {
+export async function commitAndPush(worktreePath: string, commitMessage: string, issueNumber: number): Promise<void> {
   const git = simpleGit({ baseDir: worktreePath })
   await git.addConfig('user.email', 'kronk-bot@users.noreply.github.com')
   await git.addConfig('user.name', 'kronk-bot')

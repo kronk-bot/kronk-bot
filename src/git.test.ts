@@ -13,7 +13,18 @@ const mockStatus = mock.fn(async () => ({ staged: [] }))
 const mockCommit = mock.fn(async () => {})
 const mockPush = mock.fn(async () => {})
 const mockRevparse = mock.fn(async () => 'kronk/42-fix-bug')
-const mockGitInstance = { clone: mockClone, fetch: mockFetch, reset: mockReset, raw: mockRaw, addConfig: mockAddConfig, add: mockAdd, status: mockStatus, commit: mockCommit, push: mockPush, revparse: mockRevparse }
+const mockGitInstance = {
+  clone: mockClone,
+  fetch: mockFetch,
+  reset: mockReset,
+  raw: mockRaw,
+  addConfig: mockAddConfig,
+  add: mockAdd,
+  status: mockStatus,
+  commit: mockCommit,
+  push: mockPush,
+  revparse: mockRevparse,
+}
 const mockSimpleGit = mock.fn(() => mockGitInstance as any)
 
 let existsSyncResult = false
@@ -121,15 +132,11 @@ describe('createWorktree', () => {
   it('removes any existing worktree then creates with -B', async () => {
     await createWorktree('/repo', '/repo/worktrees/42', 'kronk/42-fix-bug', 'tok')
 
-    const removeCall = mockRaw.mock.calls.find(
-      (c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'remove'
-    )
+    const removeCall = mockRaw.mock.calls.find((c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'remove')
     assert.ok(removeCall, 'expected a worktree remove call before add')
     assert.deepEqual(removeCall.arguments.at(0), ['worktree', 'remove', '--force', '/repo/worktrees/42'])
 
-    const addCall = mockRaw.mock.calls.find(
-      (c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'add'
-    )
+    const addCall = mockRaw.mock.calls.find((c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'add')
     assert.ok(addCall, 'expected a worktree add call')
     assert.deepEqual(addCall.arguments.at(0), ['worktree', 'add', '-B', 'kronk/42-fix-bug', '/repo/worktrees/42'])
   })
@@ -137,19 +144,22 @@ describe('createWorktree', () => {
   it('appends startPoint to the worktree add command when provided', async () => {
     await createWorktree('/repo', '/repo/worktrees/42', 'feat/my-pr', 'tok', 'origin/feat/my-pr')
 
-    const addCall = mockRaw.mock.calls.find(
-      (c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'add'
-    )
+    const addCall = mockRaw.mock.calls.find((c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'add')
     assert.ok(addCall, 'expected a worktree add call')
-    assert.deepEqual(addCall.arguments.at(0), ['worktree', 'add', '-B', 'feat/my-pr', '/repo/worktrees/42', 'origin/feat/my-pr'])
+    assert.deepEqual(addCall.arguments.at(0), [
+      'worktree',
+      'add',
+      '-B',
+      'feat/my-pr',
+      '/repo/worktrees/42',
+      'origin/feat/my-pr',
+    ])
   })
 
   it('configures http.extraHeader auth in the worktree', async () => {
     await createWorktree('/repo', '/repo/worktrees/42', 'kronk/42-fix-bug', 'tok123')
 
-    const configCalls = mockRaw.mock.calls.filter(
-      (c) => (c.arguments.at(0) as unknown as string[])?.[0] === 'config'
-    )
+    const configCalls = mockRaw.mock.calls.filter((c) => (c.arguments.at(0) as unknown as string[])?.[0] === 'config')
     // First call clears existing headers, second adds ours
     const clearCall = configCalls.find((c) => {
       const args = c.arguments.at(0) as unknown as string[]
@@ -166,9 +176,7 @@ describe('createWorktree', () => {
   it('injects auth via extraHeader config on the base repo git instance', async () => {
     await createWorktree('/repo', '/repo/worktrees/42', 'kronk/42-fix-bug', 'tok123')
 
-    const repoGitCall = mockSimpleGit.mock.calls.find(
-      (c) => (c.arguments as any[])[0]?.baseDir === '/repo'
-    )
+    const repoGitCall = mockSimpleGit.mock.calls.find((c) => (c.arguments as any[])[0]?.baseDir === '/repo')
     assert.ok(repoGitCall, 'expected a simpleGit call with baseDir /repo')
     assert.ok(
       (repoGitCall.arguments as any[])[0].config?.some((c: string) => c.includes('Authorization: Basic ')),

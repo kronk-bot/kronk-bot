@@ -89,17 +89,40 @@ export class GithubClient {
   }
 
   async getToken(): Promise<string> {
-    const { token } = await this.octokit.auth({ type: 'installation' }) as { token: string }
+    const { token } = (await this.octokit.auth({ type: 'installation' })) as { token: string }
     return token
   }
 
-  private mapIssues(data: Array<{ number: number; title: string; body?: string | null; updated_at: string; state: string; user?: { type?: string; login?: string } | null; pull_request?: unknown }>): GithubIssue[] {
+  private mapIssues(
+    data: Array<{
+      number: number
+      title: string
+      body?: string | null
+      updated_at: string
+      state: string
+      user?: { type?: string; login?: string } | null
+      pull_request?: unknown
+    }>
+  ): GithubIssue[] {
     return data
       .filter((i) => i.user?.type !== 'Bot')
-      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, user: i.user?.login ?? 'unknown', updated_at: i.updated_at, state: i.state === 'open' ? 'open' : 'closed', isPR: !!i.pull_request }))
+      .map((i) => ({
+        number: i.number,
+        title: i.title,
+        body: i.body ?? null,
+        user: i.user?.login ?? 'unknown',
+        updated_at: i.updated_at,
+        state: i.state === 'open' ? 'open' : 'closed',
+        isPR: !!i.pull_request,
+      }))
   }
 
-  private mapComment(c: { id: number; user?: { login?: string } | null; body: string; created_at: string }): GithubComment {
+  private mapComment(c: {
+    id: number
+    user?: { login?: string } | null
+    body: string
+    created_at: string
+  }): GithubComment {
     return { id: c.id, user: c.user?.login ?? 'unknown', body: c.body, created_at: c.created_at }
   }
 
@@ -110,7 +133,15 @@ export class GithubClient {
         repo: this.repo,
         issue_number: issueNumber,
       })
-      return { number: data.number, title: data.title, body: data.body ?? null, user: data.user?.login ?? 'unknown', updated_at: data.updated_at, state: data.state === 'open' ? 'open' : 'closed', isPR: !!data.pull_request }
+      return {
+        number: data.number,
+        title: data.title,
+        body: data.body ?? null,
+        user: data.user?.login ?? 'unknown',
+        updated_at: data.updated_at,
+        state: data.state === 'open' ? 'open' : 'closed',
+        isPR: !!data.pull_request,
+      }
     } catch {
       return null
     }
@@ -134,9 +165,7 @@ export class GithubClient {
       issue_number: issueNumber,
       per_page: 100,
     })
-    return data
-      .filter((c): c is typeof c & { body: string } => !!c.body)
-      .map((c) => this.mapComment(c))
+    return data.filter((c): c is typeof c & { body: string } => !!c.body).map((c) => this.mapComment(c))
   }
 
   async listNewComments(since: string): Promise<GithubRepoComment[]> {
@@ -171,11 +200,13 @@ export class GithubClient {
   }
 
   async deleteBranch(branch: string): Promise<void> {
-    await this.octokit.rest.git.deleteRef({
-      owner: this.owner,
-      repo: this.repo,
-      ref: `heads/${branch}`,
-    }).catch(() => {}) // ignore if branch doesn't exist
+    await this.octokit.rest.git
+      .deleteRef({
+        owner: this.owner,
+        repo: this.repo,
+        ref: `heads/${branch}`,
+      })
+      .catch(() => {}) // ignore if branch doesn't exist
   }
 
   async getPullRequestInfo(prNumber: number): Promise<PullRequestInfo | null> {
@@ -218,26 +249,9 @@ export class GithubClient {
       }))
   }
 
-  async getPullRequestBranch(prNumber: number): Promise<string | null> {
-    try {
-      const { data } = await this.octokit.rest.pulls.get({
-        owner: this.owner,
-        repo: this.repo,
-        pull_number: prNumber,
-      })
-      return data.head.ref
-    } catch {
-      return null
-    }
-  }
-
-  async getCheckRuns(prNumber: number): Promise<{ name: string; status: string; conclusion: string | null; output: string | null }[]> {
-    const { data: pr } = await this.octokit.rest.pulls.get({
-      owner: this.owner,
-      repo: this.repo,
-      pull_number: prNumber,
-    })
-    const ref = pr.head.sha
+  async getCheckRuns(
+    ref: string
+  ): Promise<{ name: string; status: string; conclusion: string | null; output: string | null }[]> {
     const data = await this.octokit.paginate(this.octokit.rest.checks.listForRef, {
       owner: this.owner,
       repo: this.repo,
