@@ -1,19 +1,24 @@
 import { existsSync } from 'fs'
 import * as path from 'path'
-import { simpleGit, ResetMode } from 'simple-git'
+import { ResetMode, simpleGit } from 'simple-git'
 import { logger } from './logger.js'
 
+const GITHUB_REPO_URL_PREFIX = 'https://github.com/'
+const AUTH_HEADER_CONFIG_KEY = 'http.extraHeader'
+const BOT_EMAIL = 'kronk-bot@users.noreply.github.com'
+const BOT_NAME = 'kronk-bot'
+
 function encodeToken(token: string) {
-  const basic = Buffer.from(`x-access-token:${token}`).toString('base64')
+  const credentials = Buffer.from(`x-access-token:${token}`).toString('base64')
   return {
-    header: `Authorization: Basic ${basic}`,
+    header: `Authorization: Basic ${credentials}`,
     // Leading empty value clears any auth from credential helpers before setting ours
-    config: ['http.extraHeader=', `http.extraHeader=Authorization: Basic ${basic}`],
+    config: [`${AUTH_HEADER_CONFIG_KEY}=`, `${AUTH_HEADER_CONFIG_KEY}=Authorization: Basic ${credentials}`],
   }
 }
 
 export async function cloneOrFetch(repo: string, workDir: string, branch: string, token: string): Promise<void> {
-  const url = `https://github.com/${repo}.git`
+  const url = `${GITHUB_REPO_URL_PREFIX}${repo}.git`
   const gitDir = path.join(workDir, '.git')
   const { config } = encodeToken(token)
 
@@ -50,22 +55,21 @@ export async function createWorktree(
   // Bake auth into the worktree's local git config so the agent can push without needing the token.
   // Empty string first clears any auth from credential helpers, then sets ours.
   const worktreeGit = simpleGit({ baseDir: worktreePath })
-  await worktreeGit.raw(['config', '--replace-all', 'http.extraHeader', ''])
-  await worktreeGit.raw(['config', '--add', 'http.extraHeader', header])
+  await worktreeGit.raw(['config', '--replace-all', AUTH_HEADER_CONFIG_KEY, ''])
+  await worktreeGit.raw(['config', '--add', AUTH_HEADER_CONFIG_KEY, header])
 
   logger.info({ branch, worktreePath }, 'Created worktree')
 }
 
 export async function getCurrentBranch(worktreePath: string): Promise<string> {
   const git = simpleGit({ baseDir: worktreePath })
-  const head = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim()
-  return head
+  return (await git.revparse(['--abbrev-ref', 'HEAD'])).trim()
 }
 
 export async function commitAndPush(worktreePath: string, commitMessage: string, issueNumber: number): Promise<void> {
   const git = simpleGit({ baseDir: worktreePath })
-  await git.addConfig('user.email', 'kronk-bot@users.noreply.github.com')
-  await git.addConfig('user.name', 'kronk-bot')
+  await git.addConfig('user.email', BOT_EMAIL)
+  await git.addConfig('user.name', BOT_NAME)
   await git.add('.')
   const status = await git.status()
   if (status.staged.length > 0) {

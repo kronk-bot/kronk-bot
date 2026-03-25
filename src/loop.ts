@@ -1,15 +1,11 @@
 import { join } from 'path'
-import { randomUUID } from 'crypto'
 import type { Config } from './config.js'
-import type { GithubClient, GithubIssue, GithubRepoComment } from './github.js'
-import type { Storage, Trigger, NewTriggerData } from './storage.js'
+import type { GithubClient } from './github.js'
+import type { Storage, Trigger } from './storage.js'
 import { cloneOrFetch } from './git.js'
 import { Orchestrator } from './orchestrator.js'
 import { logger } from './logger.js'
-
-function isAllowed(user: string, config: Config): boolean {
-  return config.allowedUsers.length === 0 || config.allowedUsers.includes(user)
-}
+import { fetchBodyTriggers, fetchCommentTriggers } from './triggers.js'
 
 export interface LoopContext {
   config: Config
@@ -20,71 +16,6 @@ export interface LoopContext {
   repoFullName: string
   repoWorkDir: string
   repoDefaultBranch: string
-}
-
-async function fetchBodyTriggers(ctx: LoopContext, since: string): Promise<NewTriggerData[]> {
-  const { config, github, repoFullName } = ctx
-  const triggerWord = config.triggerWord
-  const updatedIssues = await github.getIssuesUpdatedSince(since)
-  const results: NewTriggerData[] = []
-
-  for (const issue of updatedIssues) {
-    if (!isAllowed(issue.user, config)) continue
-    if (!issue.body?.includes(triggerWord)) continue
-    results.push({
-      id: randomUUID(),
-      repo: repoFullName,
-      source_type: issue.isPR ? 'pr_body' : 'issue_body',
-      source_id: String(issue.number),
-      issue_number: issue.number,
-      is_pr: issue.isPR,
-      trigger_text: issue.body,
-      created_at: issue.updated_at,
-    })
-  }
-
-  return results
-}
-
-async function fetchCommentTriggers(ctx: LoopContext, since: string): Promise<NewTriggerData[]> {
-  const { config, github, botLogin, repoFullName } = ctx
-  const triggerWord = config.triggerWord
-
-  const newComments = await github.listNewComments(since)
-  const triggerComments = newComments.filter(
-    (c) => c.user !== botLogin && c.body.includes(triggerWord) && isAllowed(c.user, config)
-  )
-
-  const byIssue = new Map<number, GithubRepoComment[]>()
-  for (const comment of triggerComments) {
-    const group = byIssue.get(comment.issueNumber) ?? []
-    group.push(comment)
-    byIssue.set(comment.issueNumber, group)
-  }
-
-  const grouped = await Promise.all(
-    [...byIssue.entries()].map(async ([issueNumber, comments]) => {
-      const issue = await github.getIssue(issueNumber)
-      if (!issue) {
-        logger.warn({ repo: repoFullName, issueNumber }, 'issue not found, skipping comment triggers')
-        return []
-      }
-      return comments.map(
-        (comment): NewTriggerData => ({
-          id: randomUUID(),
-          repo: repoFullName,
-          source_type: issue.isPR ? 'pr_comment' : 'issue_comment',
-          source_id: String(comment.id),
-          issue_number: issueNumber,
-          is_pr: issue.isPR,
-          trigger_text: comment.body,
-          created_at: comment.created_at,
-        })
-      )
-    })
-  )
-
-  return grouped.flat()
 }
 
 async function processSingleTrigger(trigger: Trigger, ctx: LoopContext): Promise<void> {
@@ -128,8 +59,8 @@ export async function pollCycle(ctx: LoopContext): Promise<void> {
   // Phase 1: parallel reads — no storage writes
   const [staleTriggers, bodyTriggers, commentTriggers] = await Promise.all([
     storage.getStaleTriggers(repoFullName, config.processingTimeout),
-    fetchBodyTriggers(ctx, since),
-    fetchCommentTriggers(ctx, since),
+    fetchBodyTriggers(config, github, repoFullName, since),
+    fetchCommentTriggers(config, github, ctx.botLogin, repoFullName, since),
   ])
 
   const newTriggers = [...bodyTriggers, ...commentTriggers]

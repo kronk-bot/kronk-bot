@@ -1,7 +1,6 @@
 import type { GithubClient } from './github.js'
 import type { Storage } from './storage.js'
-import { StatsProvider } from './stats-provider.js'
-import { formatStatsFooter } from './utils.js'
+import { StatsProvider, formatStatsFooter } from './stats.js'
 import { logger } from './logger.js'
 
 export class CommentTracker {

@@ -38,6 +38,23 @@ mock.module('./logger.js', {
 
 const { cloneOrFetch, createWorktree, removeWorktree, commitAndPush, getCurrentBranch } = await import('./git.js')
 
+// --- test helpers ---
+
+/** Returns the options object passed to simpleGit() at the given call index. */
+function simpleGitOpts(index: number): Record<string, unknown> {
+  return (mockSimpleGit.mock.calls[index].arguments as unknown[])[0] as Record<string, unknown>
+}
+
+/** Returns the string[] argument passed to git.raw() at the given call index. */
+function rawArgs(callIndex: number): string[] {
+  return mockRaw.mock.calls[callIndex].arguments.at(0) as unknown as string[]
+}
+
+/** Finds the first git.raw() call whose second arg (the git subcommand) matches. */
+function findRawCall(subcommand: string) {
+  return mockRaw.mock.calls.find((c) => (c.arguments.at(0) as unknown as string[])[1] === subcommand)
+}
+
 function resetAllMocks() {
   mockClone.mock.resetCalls()
   mockFetch.mock.resetCalls()
@@ -68,8 +85,8 @@ describe('cloneOrFetch', () => {
       assert.equal(url, 'https://github.com/owner/repo.git')
       assert.equal(workDir, '/work')
 
-      const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ config: string[] }])[0]
-      assert.ok(opts.config.some((c) => c.includes('Authorization: Basic ')))
+      const opts = simpleGitOpts(0)
+      assert.ok((opts.config as string[]).some((c) => c.includes('Authorization: Basic ')))
     })
 
     it('does not fetch or reset', async () => {
@@ -93,8 +110,8 @@ describe('cloneOrFetch', () => {
       existsSyncResult = true
       await cloneOrFetch('owner/repo', '/work', 'main', 'tok123')
 
-      const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ config: string[] }])[0]
-      assert.ok(opts.config.some((c) => c.includes('Authorization: Basic ')))
+      const opts = simpleGitOpts(0)
+      assert.ok((opts.config as string[]).some((c) => c.includes('Authorization: Basic ')))
     })
 
     it('fetches with --prune', async () => {
@@ -120,7 +137,7 @@ describe('cloneOrFetch', () => {
       existsSyncResult = true
       await cloneOrFetch('owner/repo', '/my/work', 'main', 'tok123')
 
-      const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ baseDir: string }])[0]
+      const opts = simpleGitOpts(0)
       assert.equal(opts.baseDir, '/my/work')
     })
   })
@@ -132,21 +149,32 @@ describe('createWorktree', () => {
   it('removes any existing worktree then creates with -B', async () => {
     await createWorktree('/repo', '/repo/worktrees/42', 'kronk/42-fix-bug', 'tok')
 
-    const removeCall = mockRaw.mock.calls.find((c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'remove')
+    const removeCall = findRawCall('remove')
     assert.ok(removeCall, 'expected a worktree remove call before add')
-    assert.deepEqual(removeCall.arguments.at(0), ['worktree', 'remove', '--force', '/repo/worktrees/42'])
+    assert.deepEqual(rawArgs(mockRaw.mock.calls.indexOf(removeCall)), [
+      'worktree',
+      'remove',
+      '--force',
+      '/repo/worktrees/42',
+    ])
 
-    const addCall = mockRaw.mock.calls.find((c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'add')
+    const addCall = findRawCall('add')
     assert.ok(addCall, 'expected a worktree add call')
-    assert.deepEqual(addCall.arguments.at(0), ['worktree', 'add', '-B', 'kronk/42-fix-bug', '/repo/worktrees/42'])
+    assert.deepEqual(rawArgs(mockRaw.mock.calls.indexOf(addCall)), [
+      'worktree',
+      'add',
+      '-B',
+      'kronk/42-fix-bug',
+      '/repo/worktrees/42',
+    ])
   })
 
   it('appends startPoint to the worktree add command when provided', async () => {
     await createWorktree('/repo', '/repo/worktrees/42', 'feat/my-pr', 'tok', 'origin/feat/my-pr')
 
-    const addCall = mockRaw.mock.calls.find((c) => (c.arguments.at(0) as unknown as string[])?.[1] === 'add')
+    const addCall = findRawCall('add')
     assert.ok(addCall, 'expected a worktree add call')
-    assert.deepEqual(addCall.arguments.at(0), [
+    assert.deepEqual(rawArgs(mockRaw.mock.calls.indexOf(addCall)), [
       'worktree',
       'add',
       '-B',
@@ -159,14 +187,14 @@ describe('createWorktree', () => {
   it('configures http.extraHeader auth in the worktree', async () => {
     await createWorktree('/repo', '/repo/worktrees/42', 'kronk/42-fix-bug', 'tok123')
 
-    const configCalls = mockRaw.mock.calls.filter((c) => (c.arguments.at(0) as unknown as string[])?.[0] === 'config')
+    const configCalls = mockRaw.mock.calls.filter((c) => rawArgs(mockRaw.mock.calls.indexOf(c))[0] === 'config')
     // First call clears existing headers, second adds ours
     const clearCall = configCalls.find((c) => {
-      const args = c.arguments.at(0) as unknown as string[]
+      const args = rawArgs(mockRaw.mock.calls.indexOf(c))
       return args[1] === '--replace-all' && args[3] === ''
     })
     const setCall = configCalls.find((c) => {
-      const args = c.arguments.at(0) as unknown as string[]
+      const args = rawArgs(mockRaw.mock.calls.indexOf(c))
       return args[1] === '--add' && args[3]?.includes('Authorization: Basic ')
     })
     assert.ok(clearCall, 'expected a config call to clear existing auth headers')
@@ -192,8 +220,7 @@ describe('removeWorktree', () => {
     await removeWorktree('/repo', '/repo/worktrees/42')
 
     assert.equal(mockRaw.mock.calls.length, 1)
-    const args = mockRaw.mock.calls[0].arguments.at(0) as unknown as string[]
-    assert.deepEqual(args, ['worktree', 'remove', '--force', '/repo/worktrees/42'])
+    assert.deepEqual(rawArgs(0), ['worktree', 'remove', '--force', '/repo/worktrees/42'])
   })
 
   it('does not require a token', async () => {
@@ -211,8 +238,7 @@ describe('getCurrentBranch', () => {
   it('creates simpleGit with the worktreePath', async () => {
     await getCurrentBranch('/repo/worktrees/42')
 
-    const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ baseDir: string }])[0]
-    assert.equal(opts.baseDir, '/repo/worktrees/42')
+    assert.equal(simpleGitOpts(0).baseDir, '/repo/worktrees/42')
   })
 
   it('calls revparse with --abbrev-ref HEAD', async () => {
@@ -237,8 +263,7 @@ describe('commitAndPush', () => {
   it('creates simpleGit with the worktreePath', async () => {
     await commitAndPush('/repo/worktrees/42', 'fix: something', 42)
 
-    const opts = (mockSimpleGit.mock.calls[0].arguments as unknown as [{ baseDir: string }])[0]
-    assert.equal(opts.baseDir, '/repo/worktrees/42')
+    assert.equal(simpleGitOpts(0).baseDir, '/repo/worktrees/42')
   })
 
   it('sets bot user.name and user.email via addConfig', async () => {
