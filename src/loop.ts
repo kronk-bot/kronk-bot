@@ -19,7 +19,7 @@ export interface LoopContext {
 }
 
 async function processSingleTrigger(trigger: Trigger, ctx: LoopContext): Promise<void> {
-  const { config, github, storage, repoFullName, repoWorkDir } = ctx
+  const { config, github, storage, repoFullName, repoWorkDir, getToken } = ctx
 
   const now = new Date().toISOString()
   storage.markProcessing(trigger.id, now)
@@ -38,7 +38,8 @@ async function processSingleTrigger(trigger: Trigger, ctx: LoopContext): Promise
       { repo: repoFullName, issueNumber: trigger.issue_number, triggerId: trigger.id },
       'running orchestrator'
     )
-    const orchestrator = new Orchestrator(config, github, repoWorkDir, sessionDir, storage)
+    const githubToken = await getToken()
+    const orchestrator = new Orchestrator(config, github, githubToken, repoWorkDir, sessionDir, storage)
     await orchestrator.run(triggerCtx)
     storage.markDone(trigger.id, new Date().toISOString())
     logger.info({ repo: repoFullName, issueNumber: trigger.issue_number }, 'orchestrator done')

@@ -12,7 +12,7 @@ import type { Config } from './config.js'
 import type { TriggerContext } from './context.js'
 import type { GithubClient } from './github.js'
 import type { Storage } from './storage.js'
-import { createExploreTool, createCommentTools, CommentTracker } from './tools.js'
+import { createExploreTool, createBuildTool, createCommentTools, CommentTracker } from './tools.js'
 import { StatsProvider } from './stats.js'
 import { stripFrontmatter, MAX_LOG_ARGS_LENGTH } from './utils.js'
 import { resolveModel } from './model.js'
@@ -22,6 +22,7 @@ export class Orchestrator {
   constructor(
     private readonly config: Config,
     private readonly github: GithubClient,
+    private readonly githubToken: string,
     private readonly worktreePath: string,
     private readonly sessionDir: string,
     private readonly storage: Storage
@@ -55,6 +56,7 @@ export class Orchestrator {
     // Create tools
     const tools: AgentTool<any>[] = [
       createExploreTool(this.config, this.worktreePath, this.github),
+      createBuildTool(this.config, this.worktreePath, this.github, this.githubToken),
       ...createCommentTools(commentTracker),
     ]
 
